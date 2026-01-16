@@ -1,0 +1,1377 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgroSphere Enterprise Pro | Precision Farming OS</title>
+    
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        agro: {
+                            dark: '#0f172a',
+                            panel: '#1e293b',
+                            border: '#334155',
+                            accent: '#84cc16',
+                            alert: '#ef4444',
+                            warn: '#eab308',
+                            info: '#3b82f6'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { background-color: #020617; color: #f8fafc; overflow: hidden; }
+        
+        #map-container { height: 100vh; width: 100%; z-index: 1; filter: saturate(1.1) contrast(1.1); }
+        .leaflet-control-attribution { display: none; }
+        
+        .glass {
+            background: rgba(30, 41, 59, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        
+        .slide-right-enter-active, .slide-right-leave-active { transition: transform 0.3s ease-out; }
+        .slide-right-enter-from, .slide-right-leave-to { transform: translateX(100%); }
+
+        .slide-up-enter-active, .slide-up-leave-active { transition: all 0.3s ease-out; }
+        .slide-up-enter-from, .slide-up-leave-to { transform: translateY(20px); opacity: 0; }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #84cc16; }
+
+        .loader { border-top-color: #84cc16; animation: spinner 1.5s linear infinite; }
+        @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        @keyframes pulse-ring { 0% { transform: scale(0.95); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
+        .pulse-ring { animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite; }
+
+        [v-cloak] { display: none; }
+
+        @media (max-width: 768px) {
+            .sidebar { width: 100%; height: auto; flex-direction: row; padding: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="app" v-cloak class="relative h-screen w-screen flex flex-col md:flex-row">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar w-full md:w-20 bg-agro-dark border-b md:border-r border-agro-border z-50 flex md:flex-col items-center py-3 md:py-6 shadow-2xl">
+        <div class="text-agro-accent text-2xl md:text-3xl mb-0 md:mb-10 mr-4 md:mr-0"><i class="fas fa-seedling"></i></div>
+        
+        <nav class="flex flex-row md:flex-col gap-2 md:gap-6 w-auto md:w-full flex-1 md:flex-initial overflow-x-auto">
+            <button v-for="view in views" :key="view.id"
+                @click="currentView = view.id" 
+                :class="{'text-agro-accent border-l-0 md:border-l-4 border-b-4 md:border-b-0 border-agro-accent bg-white/5': currentView === view.id}" 
+                class="h-10 md:h-12 w-12 md:w-full flex items-center justify-center text-gray-400 hover:text-white transition-all flex-shrink-0"
+                :title="view.label">
+                <i :class="view.icon + ' text-lg md:text-xl'"></i>
+            </button>
+        </nav>
+
+        <div class="md:mt-auto flex flex-row md:flex-col items-center gap-2 md:gap-4 text-gray-500 ml-auto md:ml-0">
+            <button @click="showNotifications = !showNotifications" class="relative">
+                <i class="fas fa-bell hover:text-white cursor-pointer transition"></i>
+                <span v-if="unreadNotifications > 0" class="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] rounded-full w-3 h-3 flex items-center justify-center">{{unreadNotifications}}</span>
+            </button>
+            <div class="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-xs font-bold text-white cursor-pointer" @click="showSettings = !showSettings">AD</div>
+        </div>
+    </aside>
+
+    <main class="flex-1 relative bg-black overflow-hidden">
+        
+        <!-- HEADER -->
+        <header class="absolute top-0 left-0 right-0 h-auto md:h-16 bg-gradient-to-b from-black/90 to-transparent z-40 flex flex-col md:flex-row items-start md:items-center justify-between px-4 md:px-8 py-3 md:py-0 pointer-events-none gap-2">
+            <div class="pointer-events-auto">
+                <h1 class="text-white font-bold text-lg md:text-xl tracking-wider">AGRO<span class="text-agro-accent">SPHERE</span> <span class="text-xs text-gray-400 border border-gray-600 px-1 rounded ml-2">PRO</span></h1>
+                <div class="text-[10px] text-gray-400 font-mono">{{ connectionStatus }}</div>
+            </div>
+
+            <div class="hidden lg:flex gap-4 xl:gap-8 pointer-events-auto bg-black/40 backdrop-blur-md px-4 xl:px-6 py-2 rounded-full border border-white/10">
+                <div v-for="(price, crop) in marketPrices" :key="crop" class="flex items-center gap-2 text-xs font-mono whitespace-nowrap">
+                    <span class="text-gray-400 uppercase">{{crop}}</span>
+                    <span class="font-bold">{{price}}€</span>
+                    <span :class="priceHistory[crop]?.trend === 'up' ? 'text-green-400' : 'text-red-400'">
+                        {{ priceHistory[crop]?.trend === 'up' ? '▲' : '▼' }}
+                    </span>
+                </div>
+            </div>
+
+            <div class="pointer-events-auto text-left md:text-right">
+                <div class="text-[10px] text-gray-400 uppercase tracking-widest">Kontostand</div>
+                <div class="text-xl md:text-2xl font-bold font-mono text-white transition-all duration-500" :class="balanceColorClass">
+                    {{ formatMoney(balance) }}
+                </div>
+            </div>
+        </header>
+
+        <!-- MAP -->
+        <div id="map-container"></div>
+
+        <!-- WEATHER WIDGET (NEU) -->
+        <transition name="slide-up">
+            <div v-if="currentView === 'map'" class="absolute top-20 md:top-24 right-4 md:right-6 w-56 md:w-72 glass rounded-lg p-4 z-30">
+                <h3 class="text-xs font-bold text-gray-400 uppercase mb-3 flex items-center gap-2">
+                    <i class="fas fa-cloud-sun"></i> Wetter
+                </h3>
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-3">
+                        <i :class="weatherIcon" class="text-4xl" :style="{color: weatherColor}"></i>
+                        <div>
+                            <div class="text-3xl font-bold">{{weather.temp}}°C</div>
+                            <div class="text-xs text-gray-400">{{weather.condition}}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-xs mb-3">
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-wind text-gray-400"></i>
+                        <span>{{weather.wind}} km/h</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-tint text-blue-400"></i>
+                        <span>{{weather.humidity}}%</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-eye text-gray-400"></i>
+                        <span>{{weather.visibility}} km</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-cloud-rain text-blue-300"></i>
+                        <span>{{weather.precipitation}}%</span>
+                    </div>
+                </div>
+                <div class="pt-3 border-t border-gray-700">
+                    <div class="text-[10px] text-gray-400 mb-1">7-TAGE PROGNOSE</div>
+                    <div class="flex gap-1 justify-between">
+                        <div v-for="day in weather.forecast" :key="day.day" class="text-center">
+                            <div class="text-[9px] text-gray-500">{{day.day}}</div>
+                            <i :class="day.icon" class="text-sm my-1" :style="{color: day.color}"></i>
+                            <div class="text-[10px] font-bold">{{day.temp}}°</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- LAYER CONTROL -->
+        <transition name="slide-up">
+            <div v-if="currentView === 'map'" class="absolute top-20 md:top-24 left-4 md:left-6 w-56 md:w-64 glass rounded-lg p-4 z-30">
+                <h3 class="text-xs font-bold text-gray-400 uppercase mb-3 flex items-center gap-2">
+                    <i class="fas fa-layer-group"></i> Daten-Layer
+                </h3>
+                <div class="space-y-2">
+                    <button v-for="mode in layers" :key="mode.id" 
+                        @click="setLayer(mode.id)"
+                        class="w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between transition-all border"
+                        :class="activeLayer === mode.id ? 'bg-agro-accent/20 border-agro-accent text-white' : 'border-transparent hover:bg-white/5 text-gray-400'">
+                        <span class="flex items-center gap-2"><i :class="mode.icon" :style="{color: mode.color}"></i> {{mode.label}}</span>
+                        <div v-if="activeLayer === mode.id" class="w-2 h-2 rounded-full bg-agro-accent animate-pulse"></div>
+                    </button>
+                </div>
+
+                <div class="mt-4 pt-4 border-t border-gray-700">
+                    <div class="flex justify-between text-[10px] text-gray-500 font-mono mb-1">
+                        <span>MIN</span>
+                        <span>MAX</span>
+                    </div>
+                    <div class="h-2 w-full rounded-sm bg-gradient-to-r from-red-500 via-yellow-500 to-green-500"></div>
+                    <div class="text-center text-[10px] text-gray-400 mt-1 uppercase font-bold">{{ activeLayerLabel }} Index</div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- STATUS BAR -->
+        <div class="absolute bottom-0 left-0 right-0 h-12 glass flex items-center px-4 md:px-6 justify-between text-xs font-mono z-30">
+            <div class="flex items-center gap-4 text-gray-400">
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
+                    <span>GPS: AKTIV</span>
+                </div>
+                <div class="hidden md:flex items-center gap-2">
+                    <i class="fas fa-satellite-dish"></i>
+                    <span>{{satelliteCount}} Satelliten</span>
+                </div>
+                <div class="hidden md:block">Lat: {{centerLat.toFixed(4)}} | Lng: {{centerLng.toFixed(4)}}</div>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <div class="hidden md:block text-gray-500">{{currentTime}}</div>
+                <button @click="exportData" class="px-3 py-1 bg-agro-accent/20 text-agro-accent rounded hover:bg-agro-accent/30 transition">
+                    <i class="fas fa-download"></i> <span class="hidden md:inline">Export</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- FIELD DETAILS PANEL -->
+        <transition name="slide-right">
+            <div v-if="selectedField" class="absolute top-0 right-0 bottom-0 w-full md:w-96 glass z-40 overflow-y-auto">
+                <div class="sticky top-0 bg-agro-panel/95 backdrop-blur-md p-4 border-b border-agro-border flex items-center justify-between">
+                    <h2 class="text-lg font-bold flex items-center gap-2">
+                        <i class="fas fa-map-marker-alt text-agro-accent"></i>
+                        Feld {{selectedField.id}}
+                    </h2>
+                    <button @click="closePanel" class="text-gray-400 hover:text-white">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+
+                <div class="p-4 space-y-4">
+                    <!-- Field Info -->
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="bg-agro-dark/50 p-3 rounded">
+                            <div class="text-[10px] text-gray-400 uppercase mb-1">Frucht</div>
+                            <div class="font-bold">{{selectedField.crop}}</div>
+                        </div>
+                        <div class="bg-agro-dark/50 p-3 rounded">
+                            <div class="text-[10px] text-gray-400 uppercase mb-1">Fläche</div>
+                            <div class="font-bold">{{selectedField.area}} ha</div>
+                        </div>
+                        <div class="bg-agro-dark/50 p-3 rounded">
+                            <div class="text-[10px] text-gray-400 uppercase mb-1">Bodenart</div>
+                            <div class="font-bold text-sm">{{selectedField.soil}}</div>
+                        </div>
+                        <div class="bg-agro-dark/50 p-3 rounded">
+                            <div class="text-[10px] text-gray-400 uppercase mb-1">Est. Ertrag</div>
+                            <div class="font-bold text-agro-accent">{{selectedField.data.yield}}%</div>
+                        </div>
+                    </div>
+
+                    <!-- Profitability -->
+                    <div class="bg-gradient-to-r from-green-900/30 to-green-700/30 border border-green-700/50 p-4 rounded-lg">
+                        <div class="text-xs text-green-300 mb-2 flex items-center gap-2">
+                            <i class="fas fa-coins"></i> ERWARTETER GEWINN
+                        </div>
+                        <div class="text-3xl font-bold text-green-400">{{formatMoney(calculateProfit(selectedField))}}</div>
+                        <div class="text-xs text-green-300 mt-1">bei aktuellem Marktpreis</div>
+                    </div>
+
+                    <!-- Nutrient Chart -->
+                    <div class="bg-agro-dark/50 p-4 rounded-lg">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase mb-3">Nährstoff-Analyse</h3>
+                        <canvas id="fieldChart" class="w-full" height="200"></canvas>
+                    </div>
+
+                    <!-- Detailed Metrics -->
+                    <div class="bg-agro-dark/50 p-4 rounded-lg">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase mb-3">Bodenkennwerte</h3>
+                        <div class="space-y-3">
+                            <div v-for="nutrient in fieldNutrients" :key="nutrient.name">
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="text-gray-400">{{nutrient.name}}</span>
+                                    <span :class="getNutrientColor(nutrient.value)" class="font-bold">{{nutrient.value}}{{nutrient.unit}}</span>
+                                </div>
+                                <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+                                    <div :class="getNutrientBarColor(nutrient.percent)" class="h-full transition-all duration-500" :style="{width: nutrient.percent + '%'}"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recommendations (NEU) -->
+                    <div class="bg-blue-900/20 border border-blue-700/50 p-4 rounded-lg">
+                        <h3 class="text-xs font-bold text-blue-300 uppercase mb-3 flex items-center gap-2">
+                            <i class="fas fa-lightbulb"></i> KI-Empfehlungen
+                        </h3>
+                        <div class="space-y-2 text-sm">
+                            <div v-for="rec in fieldRecommendations" :key="rec" class="flex gap-2 text-gray-300">
+                                <i class="fas fa-check-circle text-blue-400 mt-1 flex-shrink-0"></i>
+                                <span>{{rec}}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="grid grid-cols-2 gap-2">
+                        <button class="px-4 py-3 bg-agro-accent text-agro-dark rounded font-bold hover:bg-agro-accent/80 transition">
+                            <i class="fas fa-tractor"></i> Maschine zuweisen
+                        </button>
+                        <button class="px-4 py-3 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 transition">
+                            <i class="fas fa-route"></i> Route planen
+                        </button>
+                        <button class="px-4 py-3 bg-yellow-600 text-white rounded font-bold hover:bg-yellow-700 transition">
+                            <i class="fas fa-flask"></i> Bodenprobe
+                        </button>
+                        <button class="px-4 py-3 bg-purple-600 text-white rounded font-bold hover:bg-purple-700 transition">
+                            <i class="fas fa-camera"></i> Drohne senden
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- FLEET VIEW -->
+        <transition name="slide-up">
+            <div v-if="currentView === 'fleet'" class="absolute top-20 left-4 right-4 bottom-16 glass rounded-lg p-4 md:p-6 overflow-y-auto z-30">
+                <h2 class="text-xl font-bold mb-4 flex items-center gap-3">
+                    <i class="fas fa-tractor text-agro-accent"></i> Maschinenpark
+                    <span class="text-sm font-normal text-gray-400">({{fleet.length}} Fahrzeuge)</span>
+                </h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div v-for="vehicle in fleet" :key="vehicle.id" class="bg-agro-dark/50 border rounded-lg p-4 hover:border-agro-accent transition cursor-pointer"
+                         :class="vehicle.status === 'working' ? 'border-green-500/50' : vehicle.status === 'maintenance' ? 'border-red-500/50' : 'border-gray-700'">
+                        <div class="flex items-start justify-between mb-3">
+                            <div class="flex items-center gap-3">
+                                <div class="w-12 h-12 bg-agro-accent/20 rounded-lg flex items-center justify-center text-2xl">
+                                    <i class="fas fa-tractor text-agro-accent"></i>
+                                </div>
+                                <div>
+                                    <div class="font-bold">{{vehicle.name}}</div>
+                                    <div class="text-xs text-gray-400">{{vehicle.model}}</div>
+                                </div>
+                            </div>
+                            <div class="px-2 py-1 rounded text-[10px] font-bold uppercase"
+                                 :class="getStatusClass(vehicle.status)">
+                                {{vehicle.status}}
+                            </div>
+                        </div>
+
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Betriebsstunden</span>
+                                <span class="font-mono font-bold">{{vehicle.hours}}h</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Kraftstoff</span>
+                                <span class="font-mono font-bold" :class="vehicle.fuel < 30 ? 'text-red-400' : 'text-green-400'">{{vehicle.fuel}}%</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Aufgabe</span>
+                                <span class="font-bold text-xs">{{vehicle.task || 'Keine'}}</span>
+                            </div>
+                        </div>
+
+                        <!-- Fuel Bar -->
+                        <div class="mt-3 h-2 bg-gray-700 rounded-full overflow-hidden">
+                            <div class="h-full transition-all duration-500" 
+                                 :class="vehicle.fuel < 30 ? 'bg-red-500' : vehicle.fuel < 60 ? 'bg-yellow-500' : 'bg-green-500'"
+                                 :style="{width: vehicle.fuel + '%'}"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Drones Section (NEU) -->
+                <div class="mt-8">
+                    <h3 class="text-lg font-bold mb-4 flex items-center gap-3">
+                        <i class="fas fa-helicopter text-purple-400"></i> Drohnenflotte
+                        <span class="text-sm font-normal text-gray-400">({{drones.length}} Drohnen)</span>
+                    </h3>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div v-for="drone in drones" :key="drone.id" class="bg-agro-dark/50 border border-gray-700 rounded-lg p-4 hover:border-purple-500 transition">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="flex items-center gap-2">
+                                    <i class="fas fa-helicopter text-purple-400 text-xl"></i>
+                                    <span class="font-bold">{{drone.name}}</span>
+                                </div>
+                                <div v-if="drone.active" class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
+                            </div>
+                            <div class="text-xs space-y-1 text-gray-400">
+                                <div class="flex justify-between">
+                                    <span>Batterie</span>
+                                    <span :class="drone.battery > 50 ? 'text-green-400' : 'text-red-400'" class="font-bold">{{drone.battery}}%</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Flugzeit</span>
+                                    <span class="font-mono">{{drone.flightTime}}min</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>Aufgabe</span>
+                                    <span class="text-white text-[10px]">{{drone.task}}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- FINANCE VIEW -->
+        <transition name="slide-up">
+            <div v-if="currentView === 'finance'" class="absolute top-20 left-4 right-4 bottom-16 glass rounded-lg p-4 md:p-6 overflow-y-auto z-30">
+                <h2 class="text-xl font-bold mb-6 flex items-center gap-3">
+                    <i class="fas fa-chart-line text-agro-accent"></i> Finanzübersicht
+                </h2>
+
+                <!-- Summary Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-gradient-to-br from-green-900/40 to-green-700/40 border border-green-600/50 p-4 rounded-lg">
+                        <div class="text-xs text-green-300 mb-1 uppercase">Einnahmen (Monat)</div>
+                        <div class="text-2xl font-bold text-white">{{formatMoney(monthlyIncome)}}</div>
+                        <div class="text-xs text-green-300 mt-1 flex items-center gap-1">
+                            <i class="fas fa-arrow-up"></i> +12% vs. Vormonat
+                        </div>
+                    </div>
+                    <div class="bg-gradient-to-br from-red-900/40 to-red-700/40 border border-red-600/50 p-4 rounded-lg">
+                        <div class="text-xs text-red-300 mb-1 uppercase">Ausgaben (Monat)</div>
+                        <div class="text-2xl font-bold text-white">{{formatMoney(monthlyExpenses)}}</div>
+                        <div class="text-xs text-red-300 mt-1 flex items-center gap-1">
+                            <i class="fas fa-arrow-down"></i> -5% vs. Vormonat
+                        </div>
+                    </div>
+                    <div class="bg-gradient-to-br from-blue-900/40 to-blue-700/40 border border-blue-600/50 p-4 rounded-lg">
+                        <div class="text-xs text-blue-300 mb-1 uppercase">Gewinn (Monat)</div>
+                        <div class="text-2xl font-bold text-white">{{formatMoney(monthlyProfit)}}</div>
+                        <div class="text-xs text-blue-300 mt-1 flex items-center gap-1">
+                            <i class="fas fa-arrow-up"></i> +18% vs. Vormonat
+                        </div>
+                    </div>
+                    <div class="bg-gradient-to-br from-purple-900/40 to-purple-700/40 border border-purple-600/50 p-4 rounded-lg">
+                        <div class="text-xs text-purple-300 mb-1 uppercase">Erwarteter Ertrag</div>
+                        <div class="text-2xl font-bold text-white">{{formatMoney(expectedRevenue)}}</div>
+                        <div class="text-xs text-purple-300 mt-1">Ernteprognose 2026</div>
+                    </div>
+                </div>
+
+                <!-- Financial Chart -->
+                <div class="bg-agro-dark/50 p-6 rounded-lg mb-6">
+                    <h3 class="text-sm font-bold text-gray-400 uppercase mb-4">Cashflow (12 Monate)</h3>
+                    <canvas id="financeChart" height="80"></canvas>
+                </div>
+
+                <!-- Transactions -->
+                <div class="bg-agro-dark/50 p-6 rounded-lg">
+                    <h3 class="text-sm font-bold text-gray-400 uppercase mb-4 flex items-center justify-between">
+                        <span>Letzte Transaktionen</span>
+                        <button class="text-agro-accent text-xs hover:underline">Alle anzeigen</button>
+                    </h3>
+                    <div class="space-y-3">
+                        <div v-for="tx in transactions" :key="tx.id" class="flex items-center justify-between py-3 border-b border-gray-700 last:border-0">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-full flex items-center justify-center" 
+                                     :class="tx.type === 'income' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'">
+                                    <i :class="tx.icon"></i>
+                                </div>
+                                <div>
+                                    <div class="font-bold text-sm">{{tx.description}}</div>
+                                    <div class="text-xs text-gray-400">{{tx.date}}</div>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <div class="font-bold font-mono" :class="tx.type === 'income' ? 'text-green-400' : 'text-red-400'">
+                                    {{tx.type === 'income' ? '+' : '-'}}{{formatMoney(Math.abs(tx.amount))}}
+                                </div>
+                                <div class="text-xs text-gray-400">{{tx.category}}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- TASKS VIEW -->
+        <transition name="slide-up">
+            <div v-if="currentView === 'tasks'" class="absolute top-20 left-4 right-4 bottom-16 glass rounded-lg p-4 md:p-6 overflow-y-auto z-30">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xl font-bold flex items-center gap-3">
+                        <i class="fas fa-tasks text-agro-accent"></i> Aufgaben & Planung
+                    </h2>
+                    <button @click="addNewTask" class="px-4 py-2 bg-agro-accent text-agro-dark rounded font-bold hover:bg-agro-accent/80 transition">
+                        <i class="fas fa-plus"></i> Neue Aufgabe
+                    </button>
+                </div>
+
+                <!-- Task Categories -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div v-for="category in taskCategories" :key="category.name" class="bg-agro-dark/50 border border-gray-700 rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="font-bold flex items-center gap-2">
+                                <i :class="category.icon" :style="{color: category.color}"></i>
+                                {{category.name}}
+                            </h3>
+                            <span class="text-xs bg-gray-700 px-2 py-1 rounded">{{category.tasks.length}}</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div v-for="task in category.tasks" :key="task.id" class="bg-agro-panel p-3 rounded border-l-4" :style="{'border-color': task.priority === 'high' ? '#ef4444' : task.priority === 'medium' ? '#eab308' : '#3b82f6'}">
+                                <div class="flex items-start justify-between mb-2">
+                                    <div class="flex-1">
+                                        <div class="font-bold text-sm">{{task.title}}</div>
+                                        <div class="text-xs text-gray-400 mt-1">{{task.field}}</div>
+                                    </div>
+                                    <input type="checkbox" :checked="task.completed" class="mt-1">
+                                </div>
+                                <div class="flex items-center justify-between text-xs">
+                                    <span class="text-gray-400"><i class="far fa-calendar"></i> {{task.date}}</span>
+                                    <span class="text-gray-400"><i class="far fa-clock"></i> {{task.duration}}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- ANALYTICS VIEW (NEU) -->
+        <transition name="slide-up">
+            <div v-if="currentView === 'analytics'" class="absolute top-20 left-4 right-4 bottom-16 glass rounded-lg p-4 md:p-6 overflow-y-auto z-30">
+                <h2 class="text-xl font-bold mb-6 flex items-center gap-3">
+                    <i class="fas fa-chart-bar text-agro-accent"></i> Ernte-Analytik
+                </h2>
+
+                <!-- Yield Comparison -->
+                <div class="bg-agro-dark/50 p-6 rounded-lg mb-6">
+                    <h3 class="text-sm font-bold text-gray-400 uppercase mb-4">Ertragsvergleich nach Fruchtart</h3>
+                    <canvas id="yieldChart" height="60"></canvas>
+                </div>
+
+                <!-- Field Performance -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="bg-agro-dark/50 p-6 rounded-lg">
+                        <h3 class="text-sm font-bold text-gray-400 uppercase mb-4">Top Performing Felder</h3>
+                        <div class="space-y-3">
+                            <div v-for="field in topFields" :key="field.id" class="flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-8 h-8 bg-agro-accent/20 rounded flex items-center justify-center font-bold text-agro-accent">#{{field.rank}}</div>
+                                    <div>
+                                        <div class="font-bold text-sm">Feld {{field.id}}</div>
+                                        <div class="text-xs text-gray-400">{{field.crop}}</div>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-bold text-green-400">{{field.data.yield}}%</div>
+                                    <div class="text-xs text-gray-400">{{field.area}} ha</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-agro-dark/50 p-6 rounded-lg">
+                        <h3 class="text-sm font-bold text-gray-400 uppercase mb-4">Verbesserungspotential</h3>
+                        <div class="space-y-3">
+                            <div v-for="field in bottomFields" :key="field.id" class="flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-8 h-8 bg-red-900/40 rounded flex items-center justify-center text-red-400">
+                                        <i class="fas fa-exclamation-triangle"></i>
+                                    </div>
+                                    <div>
+                                        <div class="font-bold text-sm">Feld {{field.id}}</div>
+                                        <div class="text-xs text-gray-400">{{field.crop}}</div>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-bold text-yellow-400">{{field.data.yield}}%</div>
+                                    <div class="text-xs text-gray-400">{{field.area}} ha</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- NOTIFICATIONS PANEL (NEU) -->
+        <transition name="slide-right">
+            <div v-if="showNotifications" class="absolute top-0 right-0 bottom-0 w-full md:w-96 glass z-50 overflow-y-auto">
+                <div class="sticky top-0 bg-agro-panel/95 backdrop-blur-md p-4 border-b border-agro-border flex items-center justify-between">
+                    <h2 class="text-lg font-bold flex items-center gap-2">
+                        <i class="fas fa-bell text-agro-accent"></i>
+                        Benachrichtigungen
+                    </h2>
+                    <button @click="showNotifications = false" class="text-gray-400 hover:text-white">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+
+                <div class="p-4 space-y-3">
+                    <div v-for="notif in notifications" :key="notif.id" class="bg-agro-dark/50 p-4 rounded-lg border-l-4" :class="'border-' + notif.color + '-500'">
+                        <div class="flex items-start gap-3">
+                            <i :class="notif.icon + ' text-' + notif.color + '-400 text-xl mt-1'"></i>
+                            <div class="flex-1">
+                                <div class="font-bold text-sm">{{notif.title}}</div>
+                                <div class="text-xs text-gray-400 mt-1">{{notif.message}}</div>
+                                <div class="text-[10px] text-gray-500 mt-2">{{notif.time}}</div>
+                            </div>
+                            <button v-if="!notif.read" @click="markAsRead(notif.id)" class="text-agro-accent text-xs hover:underline">
+                                Lesen
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- SETTINGS PANEL (NEU) -->
+        <transition name="slide-right">
+            <div v-if="showSettings" class="absolute top-0 right-0 bottom-0 w-full md:w-96 glass z-50 overflow-y-auto">
+                <div class="sticky top-0 bg-agro-panel/95 backdrop-blur-md p-4 border-b border-agro-border flex items-center justify-between">
+                    <h2 class="text-lg font-bold flex items-center gap-2">
+                        <i class="fas fa-cog text-agro-accent"></i>
+                        Einstellungen
+                    </h2>
+                    <button @click="showSettings = false" class="text-gray-400 hover:text-white">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+
+                <div class="p-4 space-y-6">
+                    <div>
+                        <h3 class="text-sm font-bold text-gray-400 uppercase mb-3">Kartendarstellung</h3>
+                        <div class="space-y-2">
+                            <label class="flex items-center justify-between p-3 bg-agro-dark/50 rounded cursor-pointer hover:bg-agro-dark">
+                                <span>Satellitenansicht</span>
+                                <input type="checkbox" v-model="settings.satelliteView" class="toggle">
+                            </label>
+                            <label class="flex items-center justify-between p-3 bg-agro-dark/50 rounded cursor-pointer hover:bg-agro-dark">
+                                <span>Feld-Labels anzeigen</span>
+                                <input type="checkbox" v-model="settings.showLabels" class="toggle">
+                            </label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-sm font-bold text-gray-400 uppercase mb-3">Benachrichtigungen</h3>
+                        <div class="space-y-2">
+                            <label class="flex items-center justify-between p-3 bg-agro-dark/50 rounded cursor-pointer hover:bg-agro-dark">
+                                <span>Wetteralarme</span>
+                                <input type="checkbox" v-model="settings.weatherAlerts" class="toggle">
+                            </label>
+                            <label class="flex items-center justify-between p-3 bg-agro-dark/50 rounded cursor-pointer hover:bg-agro-dark">
+                                <span>Maschinen-Warnungen</span>
+                                <input type="checkbox" v-model="settings.fleetAlerts" class="toggle">
+                            </label>
+                            <label class="flex items-center justify-between p-3 bg-agro-dark/50 rounded cursor-pointer hover:bg-agro-dark">
+                                <span>Marktpreis-Updates</span>
+                                <input type="checkbox" v-model="settings.priceAlerts" class="toggle">
+                            </label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-sm font-bold text-gray-400 uppercase mb-3">Datenverwaltung</h3>
+                        <div class="space-y-2">
+                            <button @click="saveData" class="w-full p-3 bg-agro-accent text-agro-dark rounded font-bold hover:bg-agro-accent/80 transition">
+                                <i class="fas fa-save"></i> Daten speichern
+                            </button>
+                            <button @click="clearData" class="w-full p-3 bg-red-600 text-white rounded font-bold hover:bg-red-700 transition">
+                                <i class="fas fa-trash"></i> Cache leeren
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+    </main>
+
+</div>
+
+<script>
+const { createApp } = Vue;
+
+createApp({
+    data() {
+        return {
+            // Views
+            currentView: 'map',
+            views: [
+                { id: 'map', label: 'Karte', icon: 'fas fa-map-marked-alt' },
+                { id: 'fleet', label: 'Fahrzeuge', icon: 'fas fa-tractor' },
+                { id: 'finance', label: 'Finanzen', icon: 'fas fa-chart-pie' },
+                { id: 'tasks', label: 'Aufgaben', icon: 'fas fa-clipboard-list' },
+                { id: 'analytics', label: 'Analytik', icon: 'fas fa-chart-bar' }
+            ],
+
+            // UI State
+            selectedField: null,
+            showNotifications: false,
+            showSettings: false,
+            unreadNotifications: 3,
+
+            // Map
+            map: null,
+            layerGroup: null,
+            activeLayer: 'yield',
+            centerLat: 48.3,
+            centerLng: 11.4,
+            satelliteCount: 12,
+
+            // Layers
+            layers: [
+                { id: 'yield', label: 'Ertragskarte', icon: 'fas fa-chart-bar', color: '#22c55e' },
+                { id: 'nitrogen', label: 'Stickstoff (N)', icon: 'fas fa-flask', color: '#84cc16' },
+                { id: 'ph', label: 'pH-Wert', icon: 'fas fa-vial', color: '#3b82f6' },
+                { id: 'soil', label: 'Bodentyp', icon: 'fas fa-layer-group', color: '#a8a29e' },
+                { id: 'moisture', label: 'Bodenfeuchtigkeit', icon: 'fas fa-tint', color: '#06b6d4' }
+            ],
+
+            // Fields Data
+            fields: [
+                { id: 1, crop: 'Weizen', area: 12.5, soil: 'Lehm', coords: [[48.31,11.38],[48.31,11.42],[48.33,11.42],[48.33,11.38]], data: { yield: 112, nitrogen: 165, ph: 6.8 } },
+                { id: 2, crop: 'Mais', area: 8.2, soil: 'Sandiger Lehm', coords: [[48.29,11.39],[48.29,11.41],[48.30,11.41],[48.30,11.39]], data: { yield: 98, nitrogen: 142, ph: 6.2 } },
+                { id: 3, crop: 'Gerste', area: 15.1, soil: 'Ton', coords: [[48.28,11.40],[48.28,11.43],[48.30,11.43],[48.30,11.40]], data: { yield: 105, nitrogen: 178, ph: 7.1 } },
+                { id: 4, crop: 'Raps', area: 10.3, soil: 'Schluff', coords: [[48.31,11.43],[48.31,11.46],[48.33,11.46],[48.33,11.43]], data: { yield: 108, nitrogen: 158, ph: 6.5 } },
+                { id: 5, crop: 'Zuckerrübe', area: 6.8, soil: 'Lehm', coords: [[48.33,11.38],[48.33,11.40],[48.34,11.40],[48.34,11.38]], data: { yield: 95, nitrogen: 135, ph: 6.9 } }
+            ],
+
+            // Fleet
+            fleet: [
+                { id: 'T1', name: 'Fendt 1050', model: 'Vario', status: 'working', hours: 1247, fuel: 68, task: 'Pflügen F1', lat: 48.31, lng: 11.40 },
+                { id: 'T2', name: 'John Deere 8R', model: '8R 410', status: 'idle', hours: 892, fuel: 92, task: null, lat: null, lng: null },
+                { id: 'T3', name: 'Case IH Magnum', model: '380', status: 'working', hours: 1563, fuel: 45, task: 'Aussaat F3', lat: 48.29, lng: 11.41 },
+                { id: 'T4', name: 'New Holland T7', model: 'T7.315', status: 'idle', hours: 654, fuel: 78, task: null, lat: null, lng: null },
+                { id: 'T5', name: 'Claas Axion 960', model: 'Axion', status: 'maintenance', hours: 2105, fuel: 15, task: 'Wartung', lat: null, lng: null },
+                { id: 'T6', name: 'Massey Ferguson', model: 'MF 8740', status: 'working', hours: 987, fuel: 55, task: 'Düngen F2', lat: 48.32, lng: 11.44 }
+            ],
+
+            // Drones (NEU)
+            drones: [
+                { id: 'D1', name: 'Scout Alpha', battery: 87, active: true, flightTime: 145, task: 'Feldkartierung' },
+                { id: 'D2', name: 'Scout Beta', battery: 62, active: true, flightTime: 98, task: 'Schädlingserkennung' },
+                { id: 'D3', name: 'Scout Gamma', battery: 100, active: false, flightTime: 0, task: 'Bereit' },
+                { id: 'D4', name: 'Scout Delta', battery: 34, active: false, flightTime: 234, task: 'Lädt...' }
+            ],
+
+            // Finance
+            balance: 487520,
+            moneyTrend: 0,
+            monthlyIncome: 145680,
+            monthlyExpenses: 98420,
+            expectedRevenue: 892000,
+
+            // Market Prices
+            marketPrices: {
+                'Weizen': 245,
+                'Mais': 198,
+                'Gerste': 212,
+                'Raps': 485
+            },
+            priceHistory: {},
+
+            // Weather (NEU)
+            weather: {
+                temp: 18,
+                condition: 'Teilweise bewölkt',
+                wind: 12,
+                humidity: 65,
+                visibility: 10,
+                precipitation: 20,
+                forecast: [
+                    { day: 'Mo', temp: 19, icon: 'fas fa-sun', color: '#fbbf24' },
+                    { day: 'Di', temp: 17, icon: 'fas fa-cloud-sun', color: '#94a3b8' },
+                    { day: 'Mi', temp: 16, icon: 'fas fa-cloud-rain', color: '#60a5fa' },
+                    { day: 'Do', temp: 18, icon: 'fas fa-cloud-sun', color: '#94a3b8' },
+                    { day: 'Fr', temp: 20, icon: 'fas fa-sun', color: '#fbbf24' },
+                    { day: 'Sa', temp: 22, icon: 'fas fa-sun', color: '#fbbf24' },
+                    { day: 'So', temp: 21, icon: 'fas fa-cloud', color: '#94a3b8' }
+                ]
+            },
+
+            // Tasks
+            taskCategories: [
+                {
+                    name: 'Dringend',
+                    icon: 'fas fa-exclamation-circle',
+                    color: '#ef4444',
+                    tasks: [
+                        { id: 1, title: 'Bewässerung prüfen', field: 'Feld 3', date: 'Heute', duration: '2h', priority: 'high', completed: false },
+                        { id: 2, title: 'Traktor-Wartung', field: 'Maschinenpark', date: 'Heute', duration: '4h', priority: 'high', completed: false }
+                    ]
+                },
+                {
+                    name: 'Diese Woche',
+                    icon: 'fas fa-calendar-week',
+                    color: '#eab308',
+                    tasks: [
+                        { id: 3, title: 'Düngemittel bestellen', field: 'Allgemein', date: '15.Jan', duration: '1h', priority: 'medium', completed: false },
+                        { id: 4, title: 'Bodenproben Feld 5', field: 'Feld 5', date: '16.Jan', duration: '3h', priority: 'medium', completed: false },
+                        { id: 5, title: 'Aussaat planen', field: 'Feld 2', date: '17.Jan', duration: '2h', priority: 'medium', completed: false }
+                    ]
+                },
+                {
+                    name: 'Geplant',
+                    icon: 'fas fa-list-check',
+                    color: '#3b82f6',
+                    tasks: [
+                        { id: 6, title: 'Ernte vorbereiten', field: 'Feld 1', date: '20.Jan', duration: '6h', priority: 'low', completed: false },
+                        { id: 7, title: 'Silo reinigen', field: 'Infrastruktur', date: '22.Jan', duration: '8h', priority: 'low', completed: false }
+                    ]
+                }
+            ],
+
+            // Transactions
+            transactions: [
+                { id: 1, type: 'income', description: 'Weizen-Verkauf', amount: 34500, date: '12.Jan 2026', category: 'Verkauf', icon: 'fas fa-arrow-down' },
+                { id: 2, type: 'expense', description: 'Diesel-Lieferung', amount: -8200, date: '11.Jan 2026', category: 'Betriebsmittel', icon: 'fas fa-gas-pump' },
+                { id: 3, type: 'expense', description: 'Düngemittel', amount: -12400, date: '10.Jan 2026', category: 'Betriebsmittel', icon: 'fas fa-flask' },
+                { id: 4, type: 'income', description: 'Mais-Verkauf', amount: 28900, date: '09.Jan 2026', category: 'Verkauf', icon: 'fas fa-arrow-down' },
+                { id: 5, type: 'expense', description: 'Traktor-Wartung', amount: -3500, date: '08.Jan 2026', category: 'Wartung', icon: 'fas fa-wrench' }
+            ],
+
+            // Notifications (NEU)
+            notifications: [
+                { id: 1, title: 'Wetterwarnung', message: 'Starkregen erwartet in 6 Stunden', time: 'vor 5 Min', icon: 'fas fa-cloud-showers-heavy', color: 'yellow', read: false },
+                { id: 2, title: 'Kraftstoff niedrig', message: 'Fendt 1050 hat nur noch 15% Diesel', time: 'vor 23 Min', icon: 'fas fa-gas-pump', color: 'red', read: false },
+                { id: 3, title: 'Aufgabe abgeschlossen', message: 'Pflügen auf Feld 1 beendet', time: 'vor 1 Std', icon: 'fas fa-check-circle', color: 'green', read: false },
+                { id: 4, title: 'Marktpreis-Änderung', message: 'Weizen +3.2% (245€/t)', time: 'vor 2 Std', icon: 'fas fa-chart-line', color: 'blue', read: true },
+                { id: 5, title: 'Bodenanalyse verfügbar', message: 'Ergebnisse für Feld 3 sind da', time: 'vor 4 Std', icon: 'fas fa-vial', color: 'purple', read: true }
+            ],
+
+            // Settings (NEU)
+            settings: {
+                satelliteView: false,
+                showLabels: true,
+                weatherAlerts: true,
+                fleetAlerts: true,
+                priceAlerts: true
+            },
+
+            // System
+            connectionStatus: 'Verbunden mit FarmServer_MUC_01',
+            currentTime: '',
+            chartInstance: null,
+            financeChartInstance: null,
+            yieldChartInstance: null
+        };
+    },
+
+    computed: {
+        activeLayerLabel() {
+            const layer = this.layers.find(l => l.id === this.activeLayer);
+            return layer ? layer.label : '';
+        },
+
+        balanceColorClass() {
+            if (this.moneyTrend > 0) return 'text-green-400';
+            if (this.moneyTrend < 0) return 'text-red-400';
+            return 'text-white';
+        },
+
+        weatherIcon() {
+            const condition = this.weather.condition.toLowerCase();
+            if (condition.includes('sonnig') || condition.includes('klar')) return 'fas fa-sun';
+            if (condition.includes('wolke')) return 'fas fa-cloud-sun';
+            if (condition.includes('regen')) return 'fas fa-cloud-rain';
+            return 'fas fa-cloud-sun';
+        },
+
+        weatherColor() {
+            const condition = this.weather.condition.toLowerCase();
+            if (condition.includes('sonnig')) return '#fbbf24';
+            if (condition.includes('regen')) return '#60a5fa';
+            return '#94a3b8';
+        },
+
+        monthlyProfit() {
+            return this.monthlyIncome - this.monthlyExpenses;
+        },
+
+        fieldNutrients() {
+            if (!this.selectedField) return [];
+            const f = this.selectedField;
+            return [
+                { name: 'Stickstoff (N)', value: f.data.nitrogen, unit: ' kg/ha', percent: (f.data.nitrogen / 200) * 100 },
+                { name: 'Phosphor (P)', value: Math.floor(Math.random() * 50 + 30), unit: ' mg/kg', percent: Math.random() * 80 + 20 },
+                { name: 'Kalium (K)', value: Math.floor(Math.random() * 200 + 100), unit: ' mg/kg', percent: Math.random() * 80 + 20 },
+                { name: 'pH-Wert', value: f.data.ph, unit: '', percent: (f.data.ph / 8) * 100 },
+                { name: 'Humusgehalt', value: (Math.random() * 2 + 2).toFixed(1), unit: '%', percent: 65 },
+                { name: 'Bodenfeuchtigkeit', value: Math.floor(Math.random() * 40 + 30), unit: '%', percent: 80 }
+            ];
+        },
+
+        fieldRecommendations() {
+            if (!this.selectedField) return [];
+            const recs = [];
+            const f = this.selectedField;
+
+            if (f.data.nitrogen < 150) recs.push('Stickstoffdüngung empfohlen (20-30 kg/ha)');
+            if (f.data.ph < 6.5) recs.push('Kalkung zur pH-Wert Erhöhung durchführen');
+            if (f.data.yield < 100) recs.push('Bodenanalyse durchführen um Ertrag zu optimieren');
+            
+            recs.push('Nächste Bewässerung in 3-4 Tagen');
+            recs.push('Schädlingskontrolle via Drohne empfohlen');
+
+            return recs;
+        },
+
+        topFields() {
+            return [...this.fields]
+                .sort((a, b) => b.data.yield - a.data.yield)
+                .slice(0, 3)
+                .map((f, i) => ({...f, rank: i + 1}));
+        },
+
+        bottomFields() {
+            return [...this.fields]
+                .sort((a, b) => a.data.yield - b.data.yield)
+                .slice(0, 3);
+        }
+    },
+
+    mounted() {
+        this.initMap();
+        this.renderLayers();
+        this.startSimulation();
+        this.updateClock();
+        this.loadSettings();
+        
+        // Initialize price history
+        for (let crop in this.marketPrices) {
+            this.priceHistory[crop] = { value: this.marketPrices[crop], trend: 'up' };
+        }
+
+        // Render finance chart on next tick
+        this.$nextTick(() => {
+            if (document.getElementById('financeChart')) {
+                this.renderFinanceChart();
+            }
+            if (document.getElementById('yieldChart')) {
+                this.renderYieldChart();
+            }
+        });
+    },
+
+    methods: {
+        // Map
+        initMap() {
+            this.map = L.map('map-container', {
+                center: [this.centerLat, this.centerLng],
+                zoom: 13,
+                zoomControl: false
+            });
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap'
+            }).addTo(this.map);
+
+            L.control.zoom({ position: 'bottomright' }).addTo(this.map);
+
+            this.layerGroup = L.layerGroup().addTo(this.map);
+
+            // Update center on map move
+            this.map.on('move', () => {
+                const center = this.map.getCenter();
+                this.centerLat = center.lat;
+                this.centerLng = center.lng;
+            });
+        },
+
+        renderLayers() {
+            this.layerGroup.clearLayers();
+
+            this.fields.forEach(field => {
+                const color = this.getFieldColor(field);
+                const poly = L.polygon(field.coords, {
+                    color: color,
+                    fillColor: color,
+                    fillOpacity: 0.6,
+                    weight: 1
+                }).addTo(this.layerGroup);
+
+                poly.on('mouseover', (e) => {
+                    if (this.selectedField?.id !== field.id) {
+                        e.target.setStyle({ weight: 3, fillOpacity: 0.8 });
+                    }
+                });
+                poly.on('mouseout', (e) => {
+                    if (this.selectedField?.id !== field.id) {
+                        e.target.setStyle({ weight: 1, fillOpacity: 0.6 });
+                    }
+                });
+                poly.on('click', () => {
+                    this.selectField(field, poly);
+                });
+
+                // Label
+                if (this.settings.showLabels) {
+                    const center = poly.getBounds().getCenter();
+                    const icon = L.divIcon({
+                        className: 'bg-transparent',
+                        html: `<div class="bg-black/50 text-white text-[10px] px-1 rounded border border-white/20 font-bold shadow backdrop-blur-sm text-center">F${field.id}<br>${field.crop.substring(0,3)}</div>`
+                    });
+                    L.marker(center, { icon: icon, interactive: false }).addTo(this.layerGroup);
+                }
+            });
+
+            this.updateFleetMarkers();
+        },
+
+        getFieldColor(field) {
+            if (this.activeLayer === 'yield') {
+                const val = field.data.yield;
+                return val > 110 ? '#22c55e' : val > 100 ? '#84cc16' : val > 90 ? '#eab308' : '#ef4444';
+            }
+            if (this.activeLayer === 'nitrogen') {
+                const val = field.data.nitrogen;
+                return val > 180 ? '#14532d' : val > 140 ? '#15803d' : '#facc15';
+            }
+            if (this.activeLayer === 'ph') {
+                const val = parseFloat(field.data.ph);
+                return val > 7.0 ? '#3b82f6' : val > 6.0 ? '#22c55e' : '#ef4444';
+            }
+            if (this.activeLayer === 'soil') {
+                const colors = { 'Lehm': '#78350f', 'Sandiger Lehm': '#d97706', 'Ton': '#713f12', 'Schluff': '#a8a29e' };
+                return colors[field.soil] || '#ccc';
+            }
+            if (this.activeLayer === 'moisture') {
+                return '#' + Math.floor(Math.random()*16777215).toString(16);
+            }
+            return '#ccc';
+        },
+
+        updateFleetMarkers() {
+            const tractorIcon = L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div class="w-6 h-6 bg-agro-accent rounded-full border-2 border-white shadow-lg flex items-center justify-center text-agro-dark"><i class="fas fa-tractor text-[10px]"></i></div>`
+            });
+
+            this.fleet.forEach(v => {
+                if (v.lat) L.marker([v.lat, v.lng], { icon: tractorIcon }).addTo(this.layerGroup);
+            });
+        },
+
+        setLayer(layerId) {
+            this.activeLayer = layerId;
+            this.renderLayers();
+        },
+
+        selectField(field, polyLayer) {
+            this.selectedField = field;
+            this.currentView = 'map';
+            
+            this.layerGroup.eachLayer(l => {
+                if (l instanceof L.Polygon) l.setStyle({ weight: 1, fillOpacity: 0.6 });
+            });
+            
+            polyLayer.setStyle({ weight: 4, color: '#84cc16', fillOpacity: 0.8 });
+
+            this.$nextTick(() => {
+                this.renderChart(field);
+            });
+        },
+
+        closePanel() {
+            this.selectedField = null;
+        },
+
+        renderChart(field) {
+            const ctx = document.getElementById('fieldChart');
+            if (!ctx) return;
+            
+            if (this.chartInstance) this.chartInstance.destroy();
+
+            this.chartInstance = new Chart(ctx.getContext('2d'), {
+                type: 'radar',
+                data: {
+                    labels: ['Stickstoff', 'Phosphor', 'Kalium', 'pH-Wert', 'Humus', 'Wasser'],
+                    datasets: [{
+                        label: 'Feld ' + field.id,
+                        data: [
+                            (field.data.nitrogen / 200) * 100,
+                            Math.random() * 80 + 20,
+                            Math.random() * 80 + 20,
+                            (field.data.ph / 8) * 100,
+                            65,
+                            80
+                        ],
+                        backgroundColor: 'rgba(132, 204, 22, 0.4)',
+                        borderColor: '#84cc16',
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#84cc16',
+                        pointHoverBackgroundColor: '#84cc16',
+                        pointHoverBorderColor: '#fff'
+                    }]
+                },
+                options: {
+                    scales: {
+                        r: {
+                            grid: { color: '#334155' },
+                            ticks: { display: false },
+                            pointLabels: { color: '#94a3b8', font: { size: 10 } }
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        },
+
+        renderFinanceChart() {
+            const ctx = document.getElementById('financeChart');
+            if (!ctx) return;
+            
+            if (this.financeChartInstance) this.financeChartInstance.destroy();
+
+            const labels = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+            const income = Array.from({ length: 12 }, () => Math.random() * 50000 + 100000);
+            const expenses = income.map(v => v * (0.5 + Math.random() * 0.3));
+
+            this.financeChartInstance = new Chart(ctx.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Einnahmen',
+                            data: income,
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Ausgaben',
+                            data: expenses,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            labels: { color: '#94a3b8', font: { size: 11 } }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8', callback: (val) => this.formatMoney(val) }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
+        },
+
+        renderYieldChart() {
+            const ctx = document.getElementById('yieldChart');
+            if (!ctx) return;
+            
+            if (this.yieldChartInstance) this.yieldChartInstance.destroy();
+
+            const cropTypes = ['Weizen', 'Mais', 'Gerste', 'Raps', 'Zuckerrübe'];
+            const yields = cropTypes.map(crop => {
+                const fieldOfType = this.fields.find(f => f.crop === crop);
+                return fieldOfType ? fieldOfType.data.yield : 0;
+            });
+
+            this.yieldChartInstance = new Chart(ctx.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: cropTypes,
+                    datasets: [{
+                        label: 'Ertrag (%)',
+                        data: yields,
+                        backgroundColor: ['#22c55e', '#84cc16', '#eab308', '#f59e0b', '#ef4444'],
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8' },
+                            beginAtZero: true
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
+        },
+
+        calculateProfit(field) {
+            const yieldAmount = field.area * 9;
+            const price = this.marketPrices[field.crop === 'Zuckerrübe' ? 'Mais' : field.crop] || 200;
+            return Math.floor(yieldAmount * price * (field.data.yield / 100));
+        },
+
+        getNutrientColor(val) {
+            if (val < 50) return 'text-red-400';
+            if (val < 100) return 'text-yellow-400';
+            return 'text-green-400';
+        },
+
+        getNutrientBarColor(val) {
+            if (val < 50) return 'bg-red-500';
+            if (val < 100) return 'bg-yellow-500';
+            return 'bg-green-500';
+        },
+
+        getStatusClass(status) {
+            if (status === 'working') return 'bg-green-900/40 text-green-400 border border-green-600';
+            if (status === 'maintenance') return 'bg-red-900/40 text-red-400 border border-red-600';
+            return 'bg-gray-700 text-gray-300';
+        },
+
+        formatMoney(amount) {
+            return new Intl.NumberFormat('de-DE', {
+                style: 'currency',
+                currency: 'EUR',
+                maximumFractionDigits: 0
+            }).format(amount);
+        },
+
+        updateClock() {
+            setInterval(() => {
+                const now = new Date();
+                this.currentTime = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                this.satelliteCount = 12 + Math.floor(Math.random() * 3);
+            }, 1000);
+        },
+
+        startSimulation() {
+            setInterval(() => {
+                // Market prices
+                for (let crop in this.marketPrices) {
+                    const oldPrice = this.marketPrices[crop];
+                    const change = Math.floor(Math.random() * 8) - 4;
+                    this.marketPrices[crop] += change;
+                    this.priceHistory[crop] = {
+                        value: oldPrice,
+                        trend: this.marketPrices[crop] > oldPrice ? 'up' : 'down'
+                    };
+                }
+                
+                // Balance
+                const spend = Math.random() > 0.6 ? Math.floor(Math.random() * 1000) - 500 : 0;
+                this.balance += spend;
+                this.moneyTrend = spend;
+
+                // Fleet movement
+                this.fleet.forEach(v => {
+                    if (v.status === 'working' && v.lat) {
+                        v.lat += (Math.random() - 0.5) * 0.0008;
+                        v.lng += (Math.random() - 0.5) * 0.0008;
+                        v.fuel = Math.max(10, v.fuel - Math.random() * 0.5);
+                    }
+                });
+
+                // Drones
+                this.drones.forEach(d => {
+                    if (d.active) {
+                        d.battery = Math.max(15, d.battery - Math.random() * 0.3);
+                        d.flightTime += 1;
+                    }
+                });
+
+                // Weather updates
+                if (Math.random() > 0.95) {
+                    this.weather.temp += Math.random() > 0.5 ? 1 : -1;
+                    this.weather.wind = Math.floor(Math.random() * 20 + 5);
+                }
+
+                // Occasionally update map
+                if (Math.random() > 0.8) {
+                    this.updateFleetMarkers();
+                }
+
+            }, 3000);
+        },
+
+        exportData() {
+            const data = {
+                fields: this.fields,
+                fleet: this.fleet,
+                balance: this.balance,
+                marketPrices: this.marketPrices,
+                timestamp: new Date().toISOString()
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `agrosphere_export_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            this.showNotification('Daten exportiert', 'Export erfolgreich erstellt', 'green');
+        },
+
+        saveData() {
+            localStorage.setItem('agrosphere_settings', JSON.stringify(this.settings));
+            localStorage.setItem('agrosphere_data', JSON.stringify({
+                balance: this.balance,
+                fields: this.fields,
+                fleet: this.fleet
+            }));
+            this.showNotification('Gespeichert', 'Einstellungen und Daten gespeichert', 'green');
+        },
+
+        loadSettings() {
+            const savedSettings = localStorage.getItem('agrosphere_settings');
+            if (savedSettings) {
+                this.settings = { ...this.settings, ...JSON.parse(savedSettings) };
+            }
+        },
+
+        clearData() {
+            if (confirm('Wirklich alle lokalen Daten löschen?')) {
+                localStorage.clear();
+                this.showNotification('Gelöscht', 'Alle lokalen Daten wurden gelöscht', 'red');
+            }
+        },
+
+        addNewTask() {
+            alert('Neue Aufgabe hinzufügen - Feature in Entwicklung');
+        },
+
+        markAsRead(id) {
+            const notif = this.notifications.find(n => n.id === id);
+            if (notif) {
+                notif.read = true;
+                this.unreadNotifications = this.notifications.filter(n => !n.read).length;
+            }
+        },
+
+        showNotification(title, message, color) {
+            this.notifications.unshift({
+                id: Date.now(),
+                title,
+                message,
+                time: 'gerade eben',
+                icon: 'fas fa-info-circle',
+                color,
+                read: false
+            });
+            this.unreadNotifications++;
+        }
+    }
+}).mount('#app');
+</script>
+
+</body>
+</html>
